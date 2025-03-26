@@ -13,7 +13,7 @@ CROP_SIZE = [(150, 15), (500, 350)]
 BEY_COLORS = [(255, 0, 255), (0, 0, 255), (255, 0, 0)]
 HIT_COLOR = (0, 255, 0)
 
-def initializeCamera(dev_mode: bool = False):
+def initializeCamera(dev_mode: bool = False, src=0):
     """
     カメラの初期化を行う．
     通常はRealsenseStreamを使用する．
@@ -22,7 +22,7 @@ def initializeCamera(dev_mode: bool = False):
     Beysionの実機に接続できない環境でも開発できる．
     """
     if dev_mode:
-        return WebcamVideoStream(src=1).start()
+        return WebcamVideoStream(src=src).start()
     else:
         return RealsenseStream().start()
 
@@ -146,7 +146,7 @@ def handleKeyboard(detector, image_getter):
 
 def main():
     # カメラ初期化
-    camera = initializeCamera(dev_mode=True)
+    camera = initializeCamera()
 
     # 事前に複数フレーム読み込んでカメラの安定を図る
     for _ in range(20):
