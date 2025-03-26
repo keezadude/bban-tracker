@@ -2,7 +2,7 @@
 beysion-trackerはBeysionに使用されているPythonプログラムです。
 Realsence（赤外線カメラ）の映像からコマの検出、軌跡の割り出し、衝突判定を行い、結果をUnityに送信します。
 
-### Beysion
+## Beysion
 Beysionはベイブレードの対戦に合わせて軌跡などのエフェクトを投影するシステムです。タッチテーブルの技術を応用しています。 
 詳しくは以下のサイトをご覧ください。<br>
 [紹介ページ](https://protopedia.net/prototype/4813)<br>
@@ -14,7 +14,7 @@ Beysionはベイブレードの対戦に合わせて軌跡などのエフェク�
 第29回日本バーチャルリアリティ学会大会で発表しました。
 [VR学会講演論文](https://conference.vrsj.org/ac2024/program/doc/2G-10.pdf)
 
-### 実行方法
+## 実行方法
 python 3.11 で動作確認済みです。
 1. 必要なライブラリをインストール
 ```bash
@@ -26,7 +26,7 @@ pip install -r requirements.txt
 python main.py
 ```
 
-### カメラの設定
+## カメラの設定
 実行にはRealsenceが必要ですが、main関数内のカメラの初期化を以下のように変更することでWebカメラでも実行できます。
 これはBeysionの実機に接続できない環境で開発するための設定で、実機で撮影した録画を仮想カメラに流すなどして使用します。
 ```dev_mode=True```でWebカメラ、```dev_mode=False```でRealsenceに接続します。
