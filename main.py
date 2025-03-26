@@ -146,7 +146,7 @@ def handleKeyboard(detector, image_getter):
 
 def main():
     # カメラ初期化
-    camera = initializeCamera(dev_mode=True)
+    camera = initializeCamera()
 
     # 事前に複数フレーム読み込んでカメラの安定を図る
     for _ in range(20):
