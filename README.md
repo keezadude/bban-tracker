@@ -30,6 +30,7 @@ python main.py
 実行にはRealsenceが必要ですが、main関数内のカメラの初期化を以下のように変更することでWebカメラでも実行できます。
 これはBeysionの実機に接続できない環境で開発するための設定で、実機で撮影した録画を仮想カメラに流すなどして使用します。
 ```dev_mode=True```でWebカメラ、```dev_mode=False```でRealsenceに接続します。
+```src```はカメラのインデックスです。
 ```main.py
-149:    camera = initializeCamera(dev_mode=True)
+149:    camera = initializeCamera(dev_mode=True, src=0)
 ```
