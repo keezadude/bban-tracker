@@ -1,4 +1,6 @@
-# beysion-tracker
+# beysion-tracker  
+![Coverage](https://codecov.io/gh/OWNER/REPO/branch/main/graph/badge.svg)
+
 beysion-trackerはBeysionに使用されているPythonプログラムです。
 Realsence（赤外線カメラ）の映像からコマの検出、軌跡の割り出し、衝突判定を行い、結果をUnityに送信します。
 

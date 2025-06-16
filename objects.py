@@ -1,4 +1,26 @@
 import cv2
+import numpy as np
+
+# -------------------------------------------------------------
+# Runtime-tweakable constant: position smoothing factor (0–1).
+# Exposed via set_smoothing_alpha() so the GUI can provide a
+# live slider for power users to fine-tune tracking latency vs
+# stability without restarting the application.
+# -------------------------------------------------------------
+
+SMOOTH_ALPHA: float = 0.2  # default 20 % new measurement weight
+
+
+def set_smoothing_alpha(alpha: float):
+    """Update global exponential smoothing factor used by Bey.
+
+    Args:
+        alpha: value in the inclusive range [0,1]. Values outside will be
+                clamped silently.
+    """
+    global SMOOTH_ALPHA
+    alpha = max(0.0, min(1.0, float(alpha)))
+    SMOOTH_ALPHA = alpha
 
 class Contour:
     def __init__(self, contour):
@@ -23,6 +45,49 @@ class Contour:
     def getContour(self):
         return self.contour
     
+class _SimpleKalman:
+    """Constant-velocity Kalman filter (state = [x, y, vx, vy])."""
+
+    def __init__(self, x: float, y: float):
+        # State vector
+        self.x = np.array([[x], [y], [0.0], [0.0]], dtype=float)
+
+        # Covariance matrix – start with large uncertainty in velocity
+        self.P = np.diag([1.0, 1.0, 1000.0, 1000.0])
+
+        # Process (motion) noise covariance
+        q_pos = 1e-2  # position process noise
+        q_vel = 1e-1  # velocity process noise
+        self.Q = np.diag([q_pos, q_pos, q_vel, q_vel])
+
+        # Measurement matrix: we observe only position
+        self.H = np.array([[1, 0, 0, 0], [0, 1, 0, 0]], dtype=float)
+
+        # Measurement noise covariance (pixels)
+        r = 10.0
+        self.R = np.diag([r, r])
+
+        # Identity
+        self._I = np.eye(4)
+
+    def predict(self, dt: float = 1.0):
+        """Predict next state with timestep *dt* (frames)."""
+        F = np.array([[1, 0, dt, 0], [0, 1, 0, dt], [0, 0, 1, 0], [0, 0, 0, 1]], dtype=float)
+        self.x = F @ self.x
+        self.P = F @ self.P @ F.T + self.Q
+
+    def update(self, meas_x: float, meas_y: float):
+        """Update state with a new measurement (pixel coords)."""
+        z = np.array([[meas_x], [meas_y]], dtype=float)
+        y = z - self.H @ self.x                      # innovation
+        S = self.H @ self.P @ self.H.T + self.R      # innovation covariance
+        K = self.P @ self.H.T @ np.linalg.inv(S)      # Kalman gain
+        self.x = self.x + K @ y
+        self.P = (self._I - K @ self.H) @ self.P
+
+    def get_state(self) -> tuple[float, float, float, float]:
+        return tuple(self.x.flatten())
+
 class Bey:
     def __init__(self, contour:Contour, base_pos:tuple[int, int]=(0,0)):
         self.frame : int
@@ -42,7 +107,13 @@ class Bey:
         self.ay : float = 0
         
         self.id : int
-    
+
+        # ---------------- Kalman filter ---------------- #
+        self._kf = _SimpleKalman(self.x, self.y)
+
+        # raw velocity defaults remain zero on first frame; filter will be
+        # updated after association via setPreBey().
+        
     def __str__(self):
         id = self.getId()
         x, y = self.getPos()
@@ -52,25 +123,46 @@ class Bey:
         #idを設定
         self.id = pre_bey.getId()
 
-        #速度を計算
-        x, y = self.getPos()
+        # ---------------- Kalman update ---------------- #
+        meas_x, meas_y = self.getPos()
         pre_x, pre_y = pre_bey.getPos()
-        dt = self.getFrame() - pre_bey.getFrame()
-        vx, vy = (x - pre_x)/dt, (y - pre_y)/dt
-        self.raw_vx = vx
-        self.raw_vy = vy
+        dt = max(1, self.getFrame() - pre_bey.getFrame())
 
-        #速度を平滑化
-        pre_vx, pre_vy = pre_bey.getVel()
-        self.vx = 0.05*vx + 0.95*pre_vx
-        self.vy = 0.05*vy + 0.95*pre_vy
+        # Continue using the previous Kalman filter instance
+        self._kf = pre_bey._kf  # type: ignore[attr-defined]
+        self._kf.predict(dt=dt)
+        self._kf.update(meas_x, meas_y)
 
-        pre_ax, pre_ay = pre_bey.getAcc()
-        pre_raw_vx , pre_raw_vy = pre_bey.getRawVel()
-        ax = (vx - pre_raw_vx)/dt
-        ay = (vy - pre_raw_vy)/dt
-        self.ax = 0.05*ax + 0.95*pre_ax
-        self.ay = 0.05*ay + 0.95*pre_ay
+        kx, ky, kvx, kvy = self._kf.get_state()
+
+        # ----------------------------------------------------------
+        # Exponential Smoothing (user-tunable)
+        # ----------------------------------------------------------
+        # The GUI exposes a "Position Smoothing" slider (0–100 %) that
+        # updates the global constant ``SMOOTH_ALPHA`` at runtime via
+        # objects.set_smoothing_alpha().  The value represents the weight
+        # of the **new** measurement (alpha = 1 → no smoothing, alpha = 0
+        # → fully rely on the previous filtered state).
+        #
+        # By blending the freshly updated Kalman estimate (kx, ky) with the
+        # raw measurement (meas_x, meas_y) we allow the operator to trade
+        # responsiveness for stability without having to fiddle with the
+        # Kalman noise matrices directly.
+        # ----------------------------------------------------------
+        alpha = SMOOTH_ALPHA  # range [0,1] – new measurement weight
+
+        # Blend **measurement** with **Kalman estimate**
+        self.x = int((1.0 - alpha) * kx + alpha * meas_x)
+        self.y = int((1.0 - alpha) * ky + alpha * meas_y)
+
+        # Update kinematic attributes
+        self.raw_vx = (meas_x - pre_x) / dt
+        self.raw_vy = (meas_y - pre_y) / dt
+        self.vx = float(kvx)
+        self.vy = float(kvy)
+
+        self.ax = (self.vx - pre_bey.vx) / dt
+        self.ay = (self.vy - pre_bey.vy) / dt
     
     def getFrame(self) -> int:
         return self.frame

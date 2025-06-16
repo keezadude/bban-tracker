@@ -87,10 +87,28 @@ class Registry:
         candidate_pairs = []
         # 新規Beyの各要素と、直近の既存Beyとの全組み合わせを生成
         for new_idx, new_bey in new_bey_indices.items():
+            new_pos = new_bey.getPos()
+
             for old_bey in recent_beys:
-                # 新規Beyと既存Beyの中心座標間の距離を計算
-                distance = math.dist(new_bey.getPos(), old_bey.getPos())
-                candidate_pairs.append((distance, new_idx, old_bey))
+                # --- Velocity-aware prediction --- #
+                # Estimate where the *old* Bey is expected to be in the
+                # current frame based on its last known velocity. This helps
+                # maintain a stable ID assignment when two tops pass very
+                # close to each other at high speed.
+                try:
+                    dt = self.frame_count - old_bey.getFrame()
+                    if dt < 0:
+                        dt = 0
+                    vx, vy = old_bey.getVel()
+                    px, py = old_bey.getPos()
+                    pred_pos = (px + vx * dt, py + vy * dt)
+                    pred_dist = math.dist(new_pos, pred_pos)
+                except Exception:
+                    # Fallback to centre distance if data missing
+                    pred_dist = math.dist(new_pos, old_bey.getPos())
+
+                # Use predicted distance as primary metric
+                candidate_pairs.append((pred_dist, new_idx, old_bey))
         # 距離が小さい順に並び替え（近いペアほど優先してマッチングを試みる）
         candidate_pairs.sort(key=lambda tup: tup[0])
         return candidate_pairs

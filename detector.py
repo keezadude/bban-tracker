@@ -1,12 +1,38 @@
+import json
+from pathlib import Path
 import numpy as np
 import cv2
 import itertools
 from objects import Contour, Bey, Hit
 import math
 
+# Path where CalibrationWizard persists the last-used profile
+_CONFIG_DIR = Path.home() / ".beytracker"
+_CALIB_PROFILE_FILE = _CONFIG_DIR / "calibration_profiles.json"
+
+def _load_profile():
+    """Return dict with persisted calibration values or empty dict if none."""
+    try:
+        if _CALIB_PROFILE_FILE.exists():
+            with _CALIB_PROFILE_FILE.open("r", encoding="utf-8") as fp:
+                return json.load(fp).get("last", {})
+    except Exception:
+        # On any failure we fall back to defaults silently
+        pass
+    return {}
+
 class Detector:
     def __init__(self):
+        # ---- Defaults ---- #
         self.threshold = 15
+        self.min_contour_area = 100  # formerly hard-coded lower bound
+        self.large_contour_area = 2000  # formerly threshold for split
+
+        # ---- Apply persisted profile if available ---- #
+        prof = _load_profile()
+        self.threshold = int(prof.get("threshold", self.threshold))
+        self.min_contour_area = int(prof.get("min_area", self.min_contour_area))
+        self.large_contour_area = int(prof.get("max_area", self.large_contour_area))
 
     def calibrate(self, getImage):
         #背景画像の設定
@@ -49,10 +75,11 @@ class Detector:
 
         for contour in contours:
             #小さすぎるものは認識しない
-            if(contour.getArea() < 100):#250
+            area = contour.getArea()
+            if area < self.min_contour_area:
                 pass
             #面積が250以上2000未満のものはコマ1つとして認識
-            elif(contour.getArea() < 2000):
+            elif area < self.large_contour_area:
                 bey = Bey(contour)
                 beys.append(bey)
             
@@ -61,7 +88,7 @@ class Detector:
                 x, y, w, h = contour.getBoundingRect()
                 _sure_contours, hierarchy = cv2.findContours(sure_fg[y:y+h, x:x+w].astype(np.uint8), cv2.RETR_LIST, cv2.CHAIN_APPROX_TC89_KCOS)
                 sure_contours = [Contour(contour) for contour in _sure_contours]
-                sure_beys = [Bey(s_contour, base_pos=(x, y)) for s_contour in sure_contours if(s_contour.getArea() < 2000)]
+                sure_beys = [Bey(s_contour, base_pos=(x, y)) for s_contour in sure_contours if (s_contour.getArea() < self.large_contour_area)]
                 beys += sure_beys
         
         hits = []
