@@ -93,6 +93,7 @@ class ChangeTrackerSettings:
     max_area: Optional[int] = None
     smoothing_alpha: Optional[float] = None
     invert_ir: Optional[bool] = None
+    adaptive_threshold: Optional[bool] = None
     timestamp: float = None
     
     def __post_init__(self):

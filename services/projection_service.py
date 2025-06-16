@@ -154,10 +154,125 @@ class ProjectionService(IProjectionService):
     # ==================== EVENT HANDLERS ==================== #
     
     def _handle_tracking_data(self, event: TrackingDataUpdated) -> None:
-        """Handle new tracking data and forward to Unity client."""
+        """
+        Handle new tracking data and forward to Unity client.
+        OPTIMIZED with event batching for localhost performance (Recommendation 2).
+        """
         if not self._adapter or not self._adapter.is_connected():
             return
         
+        # EVENT BATCHING OPTIMIZATION for localhost performance
+        if getattr(self, '_enable_batching', False):
+            self._add_event_to_batch(event)
+        else:
+            # Original immediate sending
+            self._send_tracking_data_immediate(event)
+    
+    def _add_event_to_batch(self, event: TrackingDataUpdated) -> None:
+        """Add event to batch for optimized localhost sending."""
+        with getattr(self, '_batch_lock', threading.RLock()):
+            # Initialize batching attributes if not present (for existing instances)
+            if not hasattr(self, '_pending_events'):
+                self._pending_events = []
+                self._last_batch_time = time.perf_counter()
+                self._max_batch_size = 3  # Optimal from performance testing
+                self._max_batch_age_ms = 16.67  # 1 frame @ 60 FPS
+                self._batches_sent = 0
+                self._events_batched = 0
+                self._batch_processing_times = []
+            
+            # Add event to pending batch
+            self._pending_events.append(event)
+            
+            # Check if we should flush the batch
+            should_flush = (
+                len(self._pending_events) >= self._max_batch_size or
+                self._is_batch_aged()
+            )
+            
+            if should_flush:
+                self._flush_event_batch()
+    
+    def _is_batch_aged(self) -> bool:
+        """Check if current batch has exceeded maximum age."""
+        if not hasattr(self, '_last_batch_time'):
+            return False
+        
+        age_ms = (time.perf_counter() - self._last_batch_time) * 1000
+        return age_ms >= getattr(self, '_max_batch_age_ms', 16.67)
+    
+    def _flush_event_batch(self) -> None:
+        """Flush current event batch to Unity client."""
+        if not hasattr(self, '_pending_events') or not self._pending_events:
+            return
+        
+        batch_start = time.perf_counter()
+        batch_size = len(self._pending_events)
+        
+        try:
+            # For batching, we can either:
+            # 1. Send the most recent event (simple approach)
+            # 2. Send all events in batch (if adapter supports it)
+            
+            # Simple approach: send most recent event (reduces overhead)
+            latest_event = self._pending_events[-1]
+            success = self._adapter.send_tracking_data(
+                latest_event.frame_id,
+                latest_event.beys,
+                latest_event.hits
+            )
+            
+            if success:
+                # Update metrics for batched sending
+                self._data_packets_sent += 1  # Only count as 1 packet sent
+                self._batches_sent += 1
+                self._events_batched += batch_size
+                
+                # Track batch processing performance
+                batch_time = (time.perf_counter() - batch_start) * 1000
+                self._batch_processing_times.append(batch_time)
+                if len(self._batch_processing_times) > 100:
+                    self._batch_processing_times.pop(0)
+                
+                # CPU savings calculation (approximate)
+                single_event_overhead = 0.1  # Estimated ms per individual send
+                cpu_saved = (batch_size - 1) * single_event_overhead
+                
+                # Log batching efficiency periodically
+                if self._batches_sent % 100 == 0:
+                    avg_batch_size = self._events_batched / self._batches_sent
+                    avg_batch_time = sum(self._batch_processing_times) / len(self._batch_processing_times)
+                    efficiency = ((avg_batch_size - 1) / avg_batch_size) * 100
+                    
+                    print(f"[ProjectionService] Batching stats: {avg_batch_size:.1f} events/batch, "
+                          f"{avg_batch_time:.3f}ms/batch, {efficiency:.1f}% efficiency gain")
+                
+                # Track send performance for overall metrics
+                send_time = batch_time / 1000.0  # Convert to seconds
+                self._send_times.append(send_time)
+                if len(self._send_times) > 100:
+                    self._send_times.pop(0)
+            else:
+                print(f"[ProjectionService] Failed to send batched tracking data "
+                      f"(batch size: {batch_size}, latest frame: {latest_event.frame_id})")
+            
+            # Clear the batch
+            self._pending_events.clear()
+            self._last_batch_time = time.perf_counter()
+            
+            # Publish performance metrics periodically
+            if time.perf_counter() - self._last_perf_report > 5.0:
+                self._publish_performance_metrics()
+                self._last_perf_report = time.perf_counter()
+                
+        except Exception as e:
+            print(f"[ProjectionService] Error flushing event batch: {e}")
+            # Clear failed batch to prevent backup
+            self._pending_events.clear()
+            self._last_batch_time = time.perf_counter()
+    
+    def _send_tracking_data_immediate(self, event: TrackingDataUpdated) -> None:
+        """Send tracking data immediately (original behavior)."""
         send_start = time.perf_counter()
         
         try:

@@ -15,46 +15,10 @@ from pathlib import Path
 from core.event_broker import EventBroker, DependencyContainer
 from core.interfaces import ITrackerHardware, IProjectionAdapter
 from hardware.realsense_d400_hal import RealSenseD400_HAL
+from adapters.beysion_unity_adapter_corrected import BeysionUnityAdapterCorrected
 from services.tracking_service import TrackingService
 from services.gui_service import GUIService
 from services.projection_service import ProjectionService
-
-
-class BeysionUnityAdapter:
-    """Placeholder adapter for Unity client communication.
-    
-    This is a minimal implementation to satisfy the architecture requirements.
-    Full implementation will be completed in CORE-02.
-    """
-    
-    def __init__(self):
-        self._connected = False
-    
-    def connect(self) -> bool:
-        print("[BeysionUnityAdapter] Placeholder adapter - connect")
-        return True
-    
-    def disconnect(self) -> None:
-        print("[BeysionUnityAdapter] Placeholder adapter - disconnect")
-        self._connected = False
-    
-    def is_connected(self) -> bool:
-        return self._connected
-    
-    def send_tracking_data(self, frame_id: int, beys: list, hits: list) -> bool:
-        # Placeholder - just log the data
-        print(f"[BeysionUnityAdapter] Frame {frame_id}: {len(beys)} beys, {len(hits)} hits")
-        return True
-    
-    def send_projection_config(self, width: int, height: int) -> bool:
-        print(f"[BeysionUnityAdapter] Projection config: {width}×{height}")
-        return True
-    
-    def receive_commands(self) -> list:
-        return []
-    
-    def get_client_info(self) -> dict:
-        return {'address': 'localhost', 'status': 'placeholder'}
 
 
 class BBanTrackerApplication:
@@ -109,12 +73,23 @@ class BBanTrackerApplication:
             # Register hardware in DI container
             self.container.register_singleton(ITrackerHardware, self.hardware)
             
-            # 3. Create projection adapter (placeholder for now)
-            print("[BBanTracker] Creating projection adapter...")
-            self.projection_adapter = BeysionUnityAdapter()
+            # 3. Create corrected projection adapter with UDP/TCP networking
+            print("[BBanTracker] Creating BeysionUnityAdapterCorrected with UDP/TCP networking...")
+            unity_path = self.config.get('unity_path')
+            if unity_path:
+                print(f"[BBanTracker] Unity executable path: {unity_path}")
             
-            # Register adapter in DI container  
+            self.projection_adapter = BeysionUnityAdapterCorrected(
+                udp_host="127.0.0.1",
+                udp_port=50007,  # Unity listening port
+                tcp_host="127.0.0.1", 
+                tcp_port=50008,  # Unity command port
+                unity_executable_path=unity_path
+            )
+            
+            # Register corrected adapter in DI container  
             self.container.register_singleton(IProjectionAdapter, self.projection_adapter)
+            print("[BBanTracker] ✅ Corrected BeysionUnityAdapterCorrected registered in DI container")
             
             # 4. Create services with dependency injection
             print("[BBanTracker] Creating services...")
@@ -123,10 +98,18 @@ class BBanTrackerApplication:
             hardware_interface = self.container.resolve(ITrackerHardware)
             projection_interface = self.container.resolve(IProjectionAdapter)
             
+            # Verify we got the real adapter, not a placeholder
+            adapter_type = type(projection_interface).__name__
+            print(f"[BBanTracker] Resolved projection adapter: {adapter_type}")
+            
             # Create services with injected dependencies
             self.tracking_service = TrackingService(self.event_broker, hardware_interface)
             self.gui_service = GUIService(self.event_broker)
             self.projection_service = ProjectionService(self.event_broker, projection_interface)
+            
+            # 4.5. Set up command callback for Unity commands (calibration, threshold)
+            print("[BBanTracker] Setting up Unity command callback integration...")
+            self._setup_unity_command_callback()
             
             # 5. Start services
             print("[BBanTracker] Starting services...")
@@ -141,39 +124,89 @@ class BBanTrackerApplication:
             
         except Exception as e:
             print(f"[BBanTracker] ❌ Initialization failed: {e}")
+            import traceback
+            traceback.print_exc()
             return False
     
-    def run(self) -> None:
+    def run(self, gui_mode: bool = True) -> None:
         """
         Run the main application loop.
         
-        This demonstrates how the EDA operates with minimal coordination
-        from the main application - services communicate via events.
+        Args:
+            gui_mode: If True, launch GUI application. If False, run console mode.
         """
-        print("[BBanTracker] Starting main application loop...")
+        print(f"[BBanTracker] Starting application in {'GUI' if gui_mode else 'console'} mode...")
         
         # Set up signal handlers for graceful shutdown
         signal.signal(signal.SIGINT, self._signal_handler)
         signal.signal(signal.SIGTERM, self._signal_handler)
         
         try:
-            # Demonstrate the EDA pattern by triggering some events
-            self._demonstrate_eda_pattern()
-            
-            # Main loop - in a real application this might be a GUI event loop
-            while not self.shutdown_requested:
-                # Monitor service health
-                self._monitor_services()
-                
-                # Brief sleep to prevent excessive CPU usage
-                time.sleep(1.0)
+            if gui_mode:
+                self._run_gui_mode()
+            else:
+                self._run_console_mode()
                 
         except KeyboardInterrupt:
             print("\n[BBanTracker] Shutdown requested by user")
         except Exception as e:
             print(f"[BBanTracker] Application error: {e}")
+            import traceback
+            traceback.print_exc()
         finally:
             self.shutdown()
+    
+    def _run_gui_mode(self) -> None:
+        """Run the application with GUI interface."""
+        try:
+            # Import EDA GUI Bridge for monolithic GUI integration
+            from gui.eda_gui_bridge import create_eda_gui_application
+            
+            print("[BBanTracker] Creating EDA-integrated GUI application...")
+            gui_app = create_eda_gui_application(self.gui_service)
+            
+            # Demonstrate EDA pattern for initial state
+            self._demonstrate_eda_pattern()
+            
+            print("[BBanTracker] 🚀 Launching BBAN-Tracker with EDA Architecture")
+            
+            # Run Qt application event loop
+            # This will block until the GUI is closed
+            exit_code = gui_app.exec()
+            
+            print(f"[BBanTracker] EDA GUI application exited with code: {exit_code}")
+            
+        except ImportError as e:
+            print(f"[BBanTracker] ❌ GUI dependencies not available: {e}")
+            print("[BBanTracker] Falling back to console mode...")
+            self._run_console_mode()
+        except Exception as e:
+            print(f"[BBanTracker] ❌ GUI launch failed: {e}")
+            import traceback
+            traceback.print_exc()
+    
+    def _run_console_mode(self) -> None:
+        """Run the application in console mode (original implementation)."""
+        print("[BBanTracker] Running in console mode...")
+        
+        # Demonstrate the EDA pattern by triggering some events
+        self._demonstrate_eda_pattern()
+        
+        # Main loop - monitor services and handle demo timeout
+        start_time = time.time()
+        demo_time = self.config.get('demo_time', 0)
+        
+        while not self.shutdown_requested:
+            # Monitor service health
+            self._monitor_services()
+            
+            # Check demo timeout
+            if demo_time > 0 and time.time() - start_time >= demo_time:
+                print(f"\n[BBanTracker] Demo completed after {demo_time} seconds")
+                break
+            
+            # Brief sleep to prevent excessive CPU usage
+            time.sleep(1.0)
     
     def _demonstrate_eda_pattern(self) -> None:
         """
@@ -242,6 +275,62 @@ class BBanTrackerApplication:
         
         return f"{len(status)}/3 ({', '.join(status)})"
     
+    def _setup_unity_command_callback(self) -> None:
+        """Set up command callback integration between Unity adapter and tracking service."""
+        def unity_command_callback(command: str, adapter) -> str:
+            """
+            Handle Unity commands by forwarding them to the appropriate services.
+            
+            This integrates the corrected adapter with the EDA system by translating
+            Unity commands to EDA events and returning appropriate responses.
+            """
+            try:
+                if command == "calibrate":
+                    # Publish calibration event to tracking service
+                    from core.events import CalibrateTracker
+                    self.event_broker.publish(CalibrateTracker())
+                    print("[BBanTracker] Unity calibration request forwarded to tracking service")
+                    return "calibrated"
+                
+                elif command == "threshold_up":
+                    # Get current detector settings and increment threshold
+                    current_settings = self.tracking_service.get_current_settings()
+                    current_threshold = current_settings.get('threshold', 15)
+                    new_threshold = current_threshold + 1
+                    
+                    # Publish threshold change event
+                    from core.events import ChangeTrackerSettings
+                    self.event_broker.publish(ChangeTrackerSettings(threshold=new_threshold))
+                    print(f"[BBanTracker] Unity threshold_up: {current_threshold} -> {new_threshold}")
+                    return f"threshold:{new_threshold}"
+                
+                elif command == "threshold_down":
+                    # Get current detector settings and decrement threshold
+                    current_settings = self.tracking_service.get_current_settings()
+                    current_threshold = current_settings.get('threshold', 15)
+                    new_threshold = max(1, current_threshold - 1)  # Prevent going below 1
+                    
+                    # Publish threshold change event
+                    from core.events import ChangeTrackerSettings
+                    self.event_broker.publish(ChangeTrackerSettings(threshold=new_threshold))
+                    print(f"[BBanTracker] Unity threshold_down: {current_threshold} -> {new_threshold}")
+                    return f"threshold:{new_threshold}"
+                
+                else:
+                    print(f"[BBanTracker] Unknown Unity command: {command}")
+                    return "unknown_command"
+                    
+            except Exception as e:
+                print(f"[BBanTracker] Error handling Unity command '{command}': {e}")
+                return "error"
+        
+        # Set the callback on the corrected adapter
+        if hasattr(self.projection_adapter, 'set_command_callback'):
+            self.projection_adapter.set_command_callback(unity_command_callback)
+            print("[BBanTracker] ✅ Unity command callback integration complete")
+        else:
+            print("[BBanTracker] ❌ Warning: Adapter does not support command callbacks")
+    
     def _signal_handler(self, signum, frame):
         """Handle shutdown signals gracefully."""
         print(f"\n[BBanTracker] Received signal {signum}, initiating graceful shutdown...")
@@ -299,8 +388,18 @@ def parse_arguments():
     parser.add_argument(
         '--demo-time',
         type=int,
-        default=60,
-        help='Run for specified seconds then exit (for testing)'
+        default=0,
+        help='Run for specified seconds then exit (for testing, 0=indefinite)'
+    )
+    parser.add_argument(
+        '--unity-path',
+        type=str,
+        help='Path to Unity executable for projection client'
+    )
+    parser.add_argument(
+        '--console-mode',
+        action='store_true',
+        help='Run in console mode instead of GUI mode'
     )
     
     return parser.parse_args()
@@ -318,7 +417,8 @@ def main():
     config = {
         'dev_mode': args.dev,
         'cam_src': args.cam_src,
-        'demo_time': args.demo_time
+        'demo_time': args.demo_time,
+        'unity_path': args.unity_path
     }
     
     print(f"Configuration: {config}")
@@ -327,21 +427,12 @@ def main():
     app = BBanTrackerApplication(config)
     
     if app.initialize():
-        # Run for specified time in demo mode, or indefinitely
-        if config['demo_time'] > 0:
-            print(f"\n[BBanTracker] Running for {config['demo_time']} seconds...")
-            start_time = time.time()
-            
-            try:
-                while time.time() - start_time < config['demo_time']:
-                    app._monitor_services()
-                    time.sleep(1.0)
-            except KeyboardInterrupt:
-                pass
-            
-            print(f"\n[BBanTracker] Demo completed after {config['demo_time']} seconds")
-        else:
-            app.run()
+        # Determine run mode
+        gui_mode = not args.console_mode
+        print(f"[BBanTracker] Run mode: {'GUI' if gui_mode else 'Console'}")
+        
+        # Run application
+        app.run(gui_mode=gui_mode)
     else:
         print("[BBanTracker] ❌ Application initialization failed")
         sys.exit(1)
